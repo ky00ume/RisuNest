@@ -1,6 +1,6 @@
 import { configurePluginStartup, pluginStartupGate } from './pluginStartupGate'
 import { setPluginStorageReloadHandler } from './pluginStorageProtection'
-import { writable } from "svelte/store";
+import { get, writable } from "svelte/store";
 import { language } from "../../lang";
 import { getDatabase, setDatabase, setDatabaseLite } from "../storage/database.svelte";
 import { alertConfirm, alertError } from "../alert";
@@ -8,7 +8,7 @@ import { selectSingleFile } from "../util";
 import { markBootSuspect } from "../storage/bootAttempt";
 import type { OpenAIChat } from "../process/index.svelte";
 import { fetchNative, globalFetch, readImage, saveAsset } from "../globalApi.svelte";
-import { DBState, hotReloading } from "../stores.svelte";
+import { DBState, hotReloading, settingsOpen } from "../stores.svelte";
 import type { ScriptMode } from "../process/scripts";
 import { reconcilePluginListUpdate } from "./pluginListUpdate";
 import { areV3PluginsIdle, canInterruptV3Plugins, customV3ProviderMetaStore, loadV3Plugins, prepareV3PluginsForReload, subscribeV3PluginActivity } from "./apiV3/v3.svelte";
@@ -478,9 +478,14 @@ export const PLUGIN_SYNC_RELOAD_WAIT_LIMIT_MS = 60_000
 
 export function requestPluginReloadAfterSync(): void {
     syncReload ??= createDeferredPluginReload({
-        isIdle: areV3PluginsIdle,
-        canInterrupt: canInterruptV3Plugins,
-        subscribe: subscribeV3PluginActivity,
+        // A settings modal may contain a live plugin iframe. Unloading it
+        // while the user is editing makes the form disappear without warning.
+        isIdle: () => !get(settingsOpen) && areV3PluginsIdle(),
+        canInterrupt: () => !get(settingsOpen) && canInterruptV3Plugins(),
+        subscribe: (changed) => {
+            subscribeV3PluginActivity(changed)
+            settingsOpen.subscribe(changed)
+        },
         reload: (isCurrent, interrupt) => loadPlugins(true, isCurrent, interrupt),
         onError: (error) => console.error(error),
         waitLimitMs: PLUGIN_SYNC_RELOAD_WAIT_LIMIT_MS,
@@ -553,7 +558,7 @@ export async function loadPlugins(whenIdle = false, isCurrent: () => boolean = (
 
     await applyPluginLoad(enabledPlugins.filter(isSupportedPluginVersion), () => {
         if (!allowed()) return false
-        if (!whenIdle || prepareV3PluginsForReload(interrupt)) return true
+        if (!whenIdle || (!get(settingsOpen) && prepareV3PluginsForReload(interrupt))) return true
         requestPluginReloadAfterSync()
         return false
     }, allowed)

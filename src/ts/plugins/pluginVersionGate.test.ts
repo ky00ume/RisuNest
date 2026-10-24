@@ -25,6 +25,7 @@ vi.mock('./apiV3/v3.svelte', () => ({
 // The store module has to finish evaluating before the plugin graph pulls it in
 // through the database module, otherwise its startup effect runs mid-cycle.
 import '../stores.svelte'
+import { settingsOpen } from '../stores.svelte'
 import * as alertModule from '../alert'
 import { customV3ProviderMetaStore, loadV3Plugins } from './apiV3/v3.svelte'
 import {
@@ -53,6 +54,7 @@ function makePlugin(name: string, version: RisuPlugin['version']): RisuPlugin {
 
 beforeEach(() => {
     vi.restoreAllMocks()
+    settingsOpen.set(false)
     vi.mocked(loadV3Plugins).mockClear()
     alertError = vi.spyOn(alertModule, 'alertError').mockImplementation(() => {})
     setDatabaseLite({
@@ -63,7 +65,7 @@ beforeEach(() => {
     } as unknown as Database)
 })
 
-afterEach(() => { cancelPluginReloadAfterSync() })
+afterEach(() => { cancelPluginReloadAfterSync(); settingsOpen.set(false) })
 
 describe('plugin API version gate', () => {
     it('restarts only supported enabled hosts and retains fresh provider registrations through the exact restore followup',async()=>{
@@ -303,6 +305,30 @@ describe('remote plugin reload wiring', () => {
             plugins: [{name:'synthetic', version:'3.0', enabled:true, script:'', realArg:{value:1}, arguments:{}, customLink:[], argMeta:{}}],
         } as unknown as Database)
     }
+
+    it('preserves a visible plugin settings form until the user closes settings', async () => {
+        install()
+        activity.idle = true
+        settingsOpen.set(true)
+        requestPluginReloadAfterSync()
+        await Promise.resolve()
+        expect(loadV3Plugins).not.toHaveBeenCalled()
+        settingsOpen.set(false)
+        await vi.waitFor(() => expect(loadV3Plugins).toHaveBeenCalledOnce())
+    })
+
+    it('does not interrupt an open settings form after the reload timeout', async () => {
+        install()
+        settingsOpen.set(true)
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+        try {
+            requestPluginReloadAfterSync()
+            await vi.advanceTimersByTimeAsync(PLUGIN_SYNC_RELOAD_WAIT_LIMIT_MS)
+            expect(loadV3Plugins).not.toHaveBeenCalled()
+            settingsOpen.set(false)
+            await vi.waitFor(() => expect(loadV3Plugins).toHaveBeenCalledOnce())
+        } finally { vi.useRealTimers() }
+    })
 
     it('keeps active plugins running, then loads the latest received values once idle', async () => {
         install()
